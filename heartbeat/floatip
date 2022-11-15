@@ -1,0 +1,170 @@
+#!/bin/sh
+#
+#
+# Digital Ocean Reserved IP Assigner
+#
+# Description:  Manages Digital Ocean Reserved IP as an HA resource
+#               by assigning to active node
+#
+# Authors:      indoes
+#
+# Support:      nsspam.d@gmail.com
+# License:      GNU General Public License (GPL)
+#
+# (c) 2022      Root Web Consulting Enterprises
+#
+# This resource agent was modified from the floatip-ocf resource
+# agent, which itself is made available to the public under the
+# following copyright:
+#
+# (c) 2015 GNU General Public License (GPL)
+#
+# See usage() function below for more details ...
+#
+# OCF instance parameters:
+#   OCF_RESKEY_anchor_ipv4_gate
+#   OCF_RESKEY_floating_ip
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+#######################################################################
+
+# Defaults:
+OCF_RESKEY_anchor_ipv4_gate_default=$(curl -s http://169.254.169.254/metadata/v1/interfaces/public/0/anchor_ipv4/gateway)
+OCF_RESKEY_floating_ip_default=$(curl -s http://169.254.169.254/metadata/v1/reserved_ip/ipv4/ip_address)
+
+: ${OCF_RESKEY_anchor_ipv4_gate=${OCF_RESKEY_anchor_ipv4_gate_default}}
+: ${OCF_RESKEY_floating_ip=${OCF_RESKEY_floating_ip_default}}
+
+
+#######################################################################
+
+meta_data() {
+  cat <<END
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="floatip" version="0.1">
+  <version>1.0</version>
+  <longdesc lang="en">
+floatip ocf resource agent which assigns and unassigns alocated
+Reserved IP via the DigitalOcean API to Droplets, it also uses
+ip route to alter the default route so outbound traffic will 
+be routed through the Reserved IP address
+  </longdesc>
+  <shortdesc lang="en">Resource agent to assign Reserved IP
+via DigitalOcean API</shortdesc>
+  <parameters>
+    <parameter name="do_token" unique="0" required="0">
+      <longdesc lang="en">
+      DigitalOcean API Token with Read/Write Permissions
+      </longdesc>
+      <shortdesc lang="en">DigitalOcean API Token</shortdesc>
+      <content type="string"/>
+    </parameter>
+    <parameter name="floating_ip" unique="0" required="0">
+      <longdesc lang="en">
+      Reserved IP to reassign to Droplets
+      </longdesc>
+      <shortdesc lang="en">Reserved IP</shortdesc>
+      <content type="string" default="${OCF_RESKEY_floating_ip_default}" />
+    </parameter>
+    <parameter name="anchor_ipv4_gate" unique="0" required="0">
+      <longdesc lang="en">
+      Droplet Reserved IP anchor gateway IP address to allow
+      outbound traffic to be routed through the Reserved IP Address
+      </longdesc>
+      <shortdesc lang="en">Anchor IP4 Gateway Address</shortdesc>
+      <content type="string" default="${OCF_RESKEY_anchor_ipv4_gate_default}" />
+    </parameter>
+  </parameters>
+  <actions>
+    <action name="start"        timeout="20" />
+    <action name="stop"         timeout="20" />
+    <action name="monitor"      timeout="20" interval="10" depth="0" />
+    <action name="meta-data"    timeout="5" />
+  </actions>
+</resource-agent>
+END
+}
+
+
+#######################################################################
+
+floatip_usage() {
+    cat <<END
+usage: $0 {start|stop|monitor|validate|meta-data}
+
+Expects to have a fully populated OCF RA-compliant environment set.
+END
+}
+
+
+case $__OCF_ACTION in
+    meta-data)
+        meta_data
+        exit $OCF_SUCCESS
+        ;;
+esac
+
+floatip_start() {
+   /usr/local/bin/assign-ip.new $OCF_RESKEY_do_token $OCF_RESKEY_floating_ip
+   sleep 15
+   /usr/sbin/ip route add default via $OCF_RESKEY_anchor_ipv4_gate dev eth0
+   return $OCF_SUCCESS
+}
+
+floatip_stop() {
+   /usr/sbin/ip route delete default via $OCF_RESKEY_anchor_ipv4_gate dev eth0
+   return $OCF_SUCCESS
+}
+
+floatip_status() {
+  if $(curl -s http://169.254.169.254/metadata/v1/floating_ip/ipv4/active) ; then
+    echo "Has Floating IP"
+    return $OCF_SUCCESS
+  else
+    echo "Does Not Have Floating IP"
+    return $OCF_ERR_GENERIC
+  fi
+}
+
+floatip_monitor() {
+  if $(curl -s http://169.254.169.254/metadata/v1/floating_ip/ipv4/active) ; then
+    return $OCF_SUCCESS
+  else
+    exit $OCF_NOT_RUNNING
+  fi
+}
+
+#######################################################################
+
+case $__OCF_ACTION in
+    start)
+        floatip_start
+        ;;
+    stop)
+        floatip_stop
+        ;;
+    monitor)
+        floatip_monitor
+        ;;
+    status)
+        #ocf_log info "Migrating ${OCF_RESOURCE_INSTANCE} to ${OCF_RESKEY_CRM_meta_migrate_target}."
+        floatip_status
+        ;;
+    usage|help)
+        floatip_usage
+        exit $OCF_SUCCESS
+        ;;
+    *)
+        floatip_usage
+        exit $OCF_ERR_UNIMPLEMENTED
+        ;;
+esac
+
+rc=$?
+ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION : $rc"
+exit $rc
