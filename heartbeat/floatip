@@ -110,7 +110,7 @@ case $__OCF_ACTION in
 esac
 
 floatip_start() {
-   /usr/local/bin/assign-ip.new $OCF_RESKEY_do_token $OCF_RESKEY_floating_ip
+   /usr/local/bin/assign-ip $OCF_RESKEY_do_token $OCF_RESKEY_floating_ip
    sleep 15
    /usr/sbin/ip route add default via $OCF_RESKEY_anchor_ipv4_gate dev eth0
    return $OCF_SUCCESS
